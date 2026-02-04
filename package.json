@@ -1,17 +1,21 @@
 {
-     "name": "puja-booking-backend",
-     "version": "1.0.0",
-     "description": "Backend for Shopify GraphQL order creation",
-     "main": "api/create-draft-order.js",
-     "scripts": {
-       "test": "echo \"Error: no test specified\" && exit 1"
-     },
-     "keywords": [
-       "shopify",
-       "puja",
-       "booking",
-       "graphql"
-     ],
-     "author": "Your Name",
-     "license": "MIT"
-   }
+  "name": "puja-booking-backend",
+  "version": "1.0.0",
+  "description": "Backend for Shopify GraphQL order creation",
+  "main": "api/create-draft-order.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "shopify",
+    "puja",
+    "booking",
+    "graphql"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "razorpay": "^2.9.4",
+    "node-fetch": "^3.3.2"
+  }
+}
