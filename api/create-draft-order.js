@@ -63,10 +63,20 @@ export default async function handler(req, res) {
       id: `gid://shopify/ProductVariant/${variantId}`
     });
 
-    const variantPrice = parseFloat(
-      variantResp.data.productVariant.price
-    );
-
+          if (
+        !variantResp.data ||
+        !variantResp.data.productVariant
+      ) {
+        return res.status(400).json({
+          error: "Invalid variant ID",
+          receivedVariantId: variantId,
+          shopifyResponse: variantResp
+        });
+      }
+      
+      const variantPrice = parseFloat(
+        variantResp.data.productVariant.price
+      );
     // --------------------------------------------------
     // 3️⃣ RE-CALCULATE TOTAL (SERVER-SIDE)
     // --------------------------------------------------
