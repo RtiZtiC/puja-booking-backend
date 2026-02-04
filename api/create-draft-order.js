@@ -1,51 +1,105 @@
-// Backend Endpoint for Shopify GraphQL Draft Order Creation
-// Deploy this to Vercel, Netlify, or your own Node.js server
+// Vercel Serverless Function for Shopify Draft Orders
+// File location: api/create-draft-order.js
 
-const https = require('https');
-
-// Configuration
-const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL; // e.g., 'digitalpuja.myshopify.com'
-const SHOPIFY_ADMIN_API_TOKEN = process.env.SHOPIFY_ADMIN_API_TOKEN; // Admin API access token
-const SHOPIFY_API_VERSION = '2024-01'; // GraphQL API version
-
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  // Handle preflight
+  // Handle preflight requests
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
+  // Only allow POST requests
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ 
+      error: 'Method not allowed',
+      message: 'This endpoint only accepts POST requests'
+    });
+  }
+
+  // Get environment variables
+  const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
+  const SHOPIFY_ADMIN_API_TOKEN = process.env.SHOPIFY_ADMIN_API_TOKEN;
+  const SHOPIFY_API_VERSION = '2024-01';
+
+  // Validate environment variables
+  if (!SHOPIFY_STORE_URL || !SHOPIFY_ADMIN_API_TOKEN) {
+    console.error('Missing environment variables');
+    return res.status(500).json({
+      success: false,
+      error: 'Server configuration error: Missing Shopify credentials',
+      hint: 'Set SHOPIFY_STORE_URL and SHOPIFY_ADMIN_API_TOKEN in Vercel environment variables'
+    });
   }
   
   try {
     const { mutation, variables, paymentId, totalAmount } = req.body;
     
-    console.log('Creating draft order for payment:', paymentId);
-    console.log('Total amount:', totalAmount);
-    
-    // Execute GraphQL mutation
-    const shopifyResponse = await executeShopifyGraphQL(mutation, variables);
-    
-    console.log('Shopify response:', JSON.stringify(shopifyResponse, null, 2));
-    
-    // Check for errors
-    if (shopifyResponse.errors) {
-      console.error('GraphQL errors:', shopifyResponse.errors);
+    // Validate request body
+    if (!mutation || !variables) {
       return res.status(400).json({
         success: false,
-        errors: shopifyResponse.errors
+        error: 'Missing required fields: mutation and variables',
+        received: { 
+          hasMutation: !!mutation, 
+          hasVariables: !!variables,
+          hasPaymentId: !!paymentId,
+          hasTotalAmount: !!totalAmount
+        }
       });
     }
     
-    const draftOrder = shopifyResponse.data?.draftOrderCreate?.draftOrder;
-    const userErrors = shopifyResponse.data?.draftOrderCreate?.userErrors;
+    console.log('Creating draft order for payment:', paymentId);
+    console.log('Total amount:', totalAmount);
     
+    // Make GraphQL request to Shopify
+    const shopifyUrl = `https://${SHOPIFY_STORE_URL}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
+    
+    const shopifyResponse = await fetch(shopifyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_TOKEN
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: variables
+      })
+    });
+    
+    // Check if request was successful
+    if (!shopifyResponse.ok) {
+      const errorText = await shopifyResponse.text();
+      console.error('Shopify API error:', shopifyResponse.status, errorText);
+      return res.status(shopifyResponse.status).json({
+        success: false,
+        error: 'Shopify API request failed',
+        statusCode: shopifyResponse.status,
+        details: errorText
+      });
+    }
+    
+    const data = await shopifyResponse.json();
+    
+    console.log('Shopify response:', JSON.stringify(data, null, 2));
+    
+    // Check for GraphQL errors
+    if (data.errors) {
+      console.error('GraphQL errors:', data.errors);
+      return res.status(400).json({
+        success: false,
+        errors: data.errors
+      });
+    }
+    
+    // Extract draft order from response
+    const draftOrder = data.data?.draftOrderCreate?.draftOrder;
+    const userErrors = data.data?.draftOrderCreate?.userErrors;
+    
+    // Check for user errors
     if (userErrors && userErrors.length > 0) {
       console.error('User errors:', userErrors);
       return res.status(400).json({
@@ -54,133 +108,36 @@ module.exports = async (req, res) => {
       });
     }
     
+    // Verify draft order was created
     if (!draftOrder) {
       console.error('No draft order in response');
       return res.status(500).json({
         success: false,
-        error: 'Failed to create draft order'
+        error: 'Failed to create draft order',
+        details: data
       });
     }
     
-    console.log('Draft order created successfully:', draftOrder.name);
+    console.log('✅ Draft order created successfully:', draftOrder.name);
     
-    // Optional: Mark draft order as paid using another mutation
-    // This requires a separate GraphQL mutation - see below
-    
+    // Return success response
     return res.status(200).json({
       success: true,
-      data: shopifyResponse.data
+      data: data.data,
+      draftOrderId: draftOrder.id,
+      draftOrderName: draftOrder.name,
+      invoiceUrl: draftOrder.invoiceUrl || null,
+      paymentId: paymentId,
+      totalAmount: totalAmount
     });
     
   } catch (error) {
     console.error('Server error:', error);
     return res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      type: error.name,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
-};
-
-// Execute Shopify GraphQL request
-function executeShopifyGraphQL(query, variables) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
-      query: query,
-      variables: variables
-    });
-    
-    const options = {
-      hostname: SHOPIFY_STORE_URL,
-      path: `/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length,
-        'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_TOKEN
-      }
-    };
-    
-    const shopifyReq = https.request(options, (shopifyRes) => {
-      let responseData = '';
-      
-      shopifyRes.on('data', (chunk) => {
-        responseData += chunk;
-      });
-      
-      shopifyRes.on('end', () => {
-        try {
-          const parsedData = JSON.parse(responseData);
-          resolve(parsedData);
-        } catch (error) {
-          reject(new Error('Failed to parse Shopify response: ' + error.message));
-        }
-      });
-    });
-    
-    shopifyReq.on('error', (error) => {
-      reject(new Error('Shopify request failed: ' + error.message));
-    });
-    
-    shopifyReq.write(data);
-    shopifyReq.end();
-  });
-}
-
-// Optional: Function to complete draft order and mark as paid
-async function completeDraftOrder(draftOrderId, paymentId, totalAmount) {
-  const mutation = `
-    mutation draftOrderComplete($id: ID!, $paymentPending: Boolean) {
-      draftOrderComplete(id: $id, paymentPending: $paymentPending) {
-        draftOrder {
-          id
-          order {
-            id
-            name
-          }
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }
-  `;
-  
-  const variables = {
-    id: draftOrderId,
-    paymentPending: false // Set to false since payment is already done via Razorpay
-  };
-  
-  try {
-    const result = await executeShopifyGraphQL(mutation, variables);
-    
-    if (result.data?.draftOrderComplete?.order) {
-      console.log('Draft order completed, Order ID:', result.data.draftOrderComplete.order.name);
-      
-      // Now mark the order as paid with a transaction
-      const orderId = result.data.draftOrderComplete.order.id;
-      await markOrderAsPaid(orderId, paymentId, totalAmount);
-      
-      return result.data.draftOrderComplete.order;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Error completing draft order:', error);
-    throw error;
-  }
-}
-
-// Function to mark order as paid
-async function markOrderAsPaid(orderId, paymentId, totalAmount) {
-  // Note: This requires a financial transaction mutation
-  // Shopify doesn't allow marking external payments via GraphQL easily
-  // You'll need to use REST API or manually mark orders as paid
-  
-  console.log('Order needs to be marked as paid manually or via Shopify Flow');
-  console.log('Order ID:', orderId);
-  console.log('Payment ID:', paymentId);
-  console.log('Amount:', totalAmount);
-  
-  // You can log this to a database or send a webhook to mark it later
 }
